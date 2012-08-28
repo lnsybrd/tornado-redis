@@ -1,4 +1,5 @@
 import sys
+import inspect
 import logging
 
 def name(item):
@@ -6,7 +7,7 @@ def name(item):
     return item.__name__
 
 def format_arg_value(arg_val):
-    """ 
+    """
         Return a string representing a (name, value) pair.
 
         >>> format_arg_value(('x', (1, 2, 3)))
@@ -40,7 +41,11 @@ def echo(logger, fn):
         nameless = map(repr, v[argcount:])
         keyword = map(format_arg_value, k.items())
         args = positional + defaulted + nameless + keyword
-        logger.debug("%s(%s)" % (name(fn), ", ".join(args)))
-        return fn(*v, **k)
+
+        logger.debug("--> %s(%s)" % (name(fn), ", ".join(args)))
+        ret = fn(*v, **k)
+        logger.debug("<-- %s(%s) = %s" % (name(fn), ", ".join(args), ret))
+
+        return ret
 
     return wrapped

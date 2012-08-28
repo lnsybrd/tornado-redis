@@ -2,8 +2,8 @@ import unittest
 
 from tornado import ioloop
 from functools import partial
-import bacon.utils.trace as trace
-import bacon.utils.redis as redis
+import redis.trace as trace
+import redis.redis as redis
 import logging
 import time
 import threading
@@ -11,7 +11,7 @@ import threading
 
 logger = logging.getLogger('test')
 logger.setLevel(logging.DEBUG)
-redis.logger.setLevel(logging.INFO)
+redis.logger.setLevel(logging.DEBUG)
 
 tracer = partial(trace.echo, logger)
 
@@ -19,10 +19,12 @@ class TestTornadoRedis(unittest.TestCase):
 
     @tracer
     def setUp(self):
+        # Create a callback that expects an 'OK' as it's result
         self.expectok = partial(self.expect, 'OK')
 
         self.ioloop = ioloop.IOLoop.instance()
         self.db = redis.Redis()
+
         self.db.connect(self.stop)
         self.db.select(11, self.expectok())
         self.db.flushdb(self.expectok())
@@ -39,12 +41,16 @@ class TestTornadoRedis(unittest.TestCase):
     def start(self):
         self.ioloop.start()
 
-    def expect(self, expected_value=None, expected_error=None, next=None):
+    def expect(self, expected_value=None, expected_error=None, next=None, assertFunc=None):
+        """
+            Return a function for use as a callback that handles asserting on an expected value.
+            The next parameter defines a function to call if the callback succeeds.  This provides rudimentary
+            method chaining.
+        """
 
         @tracer
         def _expect(received_error, received_value):
             self.assertEqual(received_error, expected_error)
-            self.assertEqual(type(received_value), type(expected_value))
 
             if isinstance(received_value, list):
                 received_value = sorted(received_value)
@@ -52,7 +58,8 @@ class TestTornadoRedis(unittest.TestCase):
             else:
                 expected_v = expected_value
 
-            self.assertEqual(received_value, expected_v) 
+            func = assertFunc or self.assertEqual
+            func(received_value, expected_v)
 
             if next:
                 next()
@@ -170,7 +177,7 @@ class TestRedisKeyCommands(TestTornadoRedis):
         self.db.expire('key1', 2, self.expect(1))
         self.db.ttl('key1', self.expect(2, next=self.cleanup))
         self.start()
-    
+
     @tracer
     def test_expireat(self):
         self.db.set('key1', 'value', self.expectok())
@@ -179,16 +186,19 @@ class TestRedisKeyCommands(TestTornadoRedis):
         self.start()
 
     @tracer
-    def test_randomkey(self): #TODO: Add more keys and fix the expect to allow for an 'any' kind of check
-        self.db.set('key1', 'value', self.expectok()) 
-        self.db.randomkey(self.expect('key1', next=self.cleanup))
+    def test_randomkey(self):
+
+        self.db.set('key1', 'value', self.expectok())
+        self.db.set('key2', 'value', self.expectok())
+        self.db.set('key3', 'value', self.expectok())
+        self.db.randomkey(self.expect(['key1', 'key2', 'key3'], next=self.cleanup, assertFunc=self.assertIn))
         self.start()
 
     @tracer
     def test_sort(self): #TODO: Build test
         pass
 
-    
+
 class TestRedisStringCommands(TestTornadoRedis):
     '''
     Test the set of 'string' commands as defined by the redis docs at :http://redis.io/commands#string
@@ -354,7 +364,7 @@ class TestRedisHashCommands(TestTornadoRedis):
         self.db.hset('key','field','value', self.expect(1))
         self.db.hexists('key','field', self.expect(1, next=self.cleanup))
         self.start()
-        
+
         self.db.hset('key','field','value', self.expect(1))
         self.db.hexists('key','wrongfield', self.expect(0, next=self.cleanup))
         self.start()
@@ -378,7 +388,7 @@ class TestRedisHashCommands(TestTornadoRedis):
         self.db.hmset('key','field0','value0','field1','value1','field2','value2', self.expectok())
         self.db.hkeys('key', self.expect(['field0','field1','field2'], next=self.cleanup))
         self.start()
-        
+
         self.db.hkeys('key', self.expect([None], next=self.cleanup))
         self.start()
 
@@ -387,7 +397,7 @@ class TestRedisHashCommands(TestTornadoRedis):
         self.db.hmset('key','field0','value0','field1','value1','field2','value2', self.expectok())
         self.db.hvals('key', self.expect(['value0','value1','value2'], next=self.cleanup))
         self.start()
-        
+
         self.db.hvals('key', self.expect([None], next=self.cleanup))
         self.start()
 
@@ -536,7 +546,7 @@ class TestRedisListCommands(TestTornadoRedis):
         self.db.ltrim('key',0,1,self.expectok())
         self.db.lrange('key',0,-1,self.expect(['value0','value1'], next=self.cleanup))
         self.start()
-        
+
         self.db.rpush('key','value0', self.expect(1))
         self.db.rpush('key','value1', self.expect(2))
         self.db.rpush('key','value2', self.expect(3))
@@ -544,7 +554,7 @@ class TestRedisListCommands(TestTornadoRedis):
         self.db.ltrim('key',1,-1,self.expectok())
         self.db.lrange('key',0,-1,self.expect(['value1','value2','value3'], next=self.cleanup))
         self.start()
-    
+
         self.db.rpush('key','value0', self.expect(1))
         self.db.rpush('key','value1', self.expect(2))
         self.db.rpush('key','value2', self.expect(3))
@@ -561,7 +571,7 @@ class TestRedisListCommands(TestTornadoRedis):
         self.db.lrange('key',0,-1,self.expect([None]))
         self.db.exists('key',self.expect(0, next=self.cleanup))
         self.start()
- 
+
     @tracer
     def test_rpoplpush(self):
         self.db.rpush('key','value0', self.expect(1))
@@ -589,7 +599,7 @@ class TestRedisListCommands(TestTornadoRedis):
         self.db.rpush('key2','key2.value1', self.expect(2))
         self.db.blpop('key0','key1','key2',0,self.expect(['key1','key1.value0'], next=self.cleanup))
         self.start()
-    
+
         self.db.rpush('key2','key2.value0', self.expect(1))
         self.db.rpush('key2','key2.value1', self.expect(2))
         self.db.blpop('key0','key1','key2',0,self.expect(['key2','key2.value0'], next=self.cleanup))
@@ -603,7 +613,7 @@ class TestRedisListCommands(TestTornadoRedis):
         self.db.blpop('key0','key1','key2',0,self.expect(['key1','key1.value1']))
         self.db.blpop('key0','key1','key2',0,self.expect(['key2','key2.value0'], next=self.cleanup))
         self.start()
-   
+
         self.db.blpop('key0','key1','key2',1,self.expect([None], next=self.cleanup))
         self.start()
 
@@ -616,7 +626,7 @@ class TestRedisListCommands(TestTornadoRedis):
         self.db.rpush('key2','key2.value1', self.expect(2))
         self.db.brpop('key0','key1','key2',0,self.expect(['key1','key1.value1'], next=self.cleanup))
         self.start()
-    
+
         self.db.rpush('key2','key2.value0', self.expect(1))
         self.db.rpush('key2','key2.value1', self.expect(2))
         self.db.brpop('key0','key1','key2',0,self.expect(['key2','key2.value1'], next=self.cleanup))
@@ -630,7 +640,7 @@ class TestRedisListCommands(TestTornadoRedis):
         self.db.brpop('key0','key1','key2',0,self.expect(['key1','key1.value0']))
         self.db.brpop('key0','key1','key2',0,self.expect(['key2','key2.value1'], next=self.cleanup))
         self.start()
-   
+
         self.db.brpop('key0','key1','key2',1,self.expect([None], next=self.cleanup))
         self.start()
 
@@ -644,7 +654,7 @@ class TestRedisSetCommands(TestTornadoRedis):
         self.db.sadd('key', 'value1', self.expect(1))
         self.db.sadd('key', 'value0', self.expect(0, next=self.cleanup))
         self.start()
-    
+
     @tracer
     def test_scard(self):
         self.db.sadd('key', 'value0', self.expect(1))
@@ -708,7 +718,7 @@ class TestRedisSetCommands(TestTornadoRedis):
         self.db.sinterstore('key2','key0','key1', self.expect(1))
         self.db.smembers('key2', self.expect(['value0'], next=self.cleanup))
         self.start()
-   
+
     @tracer
     def test_sismember(self):
         self.db.sadd('key0', 'value0', self.expect(1))
@@ -791,7 +801,7 @@ class TestRedisSortedSetCommands(TestTornadoRedis):
     '''
     Test the set of 'zset' commands as defined by the redis docs at :http://redis.io/commands#zset
     '''
-    
+
     @tracer
     def test_zadd(self):
         self.db.zadd('key0',0,'value0', self.expect(1))
@@ -805,7 +815,7 @@ class TestRedisSortedSetCommands(TestTornadoRedis):
         self.db.zadd('key0',2,'value2', self.expect(1))
         self.db.zcard('key0', self.expect(3, next=self.cleanup))
         self.start()
-    
+
     @tracer
     def test_zcount(self):
         self.db.zadd('key0',0,'value0', self.expect(1))
@@ -819,7 +829,7 @@ class TestRedisSortedSetCommands(TestTornadoRedis):
         self.db.zcount('key0', '1', '2', self.expect(2))
         self.db.zcount('key0', '(1', '(2', self.expect(0, next=self.cleanup))
         self.start()
-    
+
     @tracer
     def test_zincrby(self):
         self.db.zadd('key0',5,'value0', self.expect(1))
@@ -908,7 +918,7 @@ class TestRedisSortedSetCommands(TestTornadoRedis):
         self.db.zremrangebyrank('key0',-2,-1, self.expect(2))
         self.db.zrange('key0',0,-1, self.expect(['value1','value2'], next=self.cleanup))
         self.start()
-   
+
     @tracer
     def test_zremrangebyscore(self):
         self.db.zadd('key0',1,'value1', self.expect(1))
@@ -983,16 +993,20 @@ class TestRedisConnectionCommands(TestTornadoRedis):
     def test_ping(self):
         self.db.ping(self.expect('PONG', next=self.cleanup))
         self.start()
-    
+
     @tracer
     def test_echo(self):
         self.db.echo('Hello World', self.expect('Hello World', next=self.cleanup))
         self.start()
 
-    @tracer
-    def test_quit(self):
-        self.db.quit(self.expectok(next=self.cleanup))
-        self.start()
+    #@tracer
+    #def test_quit(self):
+    #    def expect_close(value, error):
+    #        logger.debug('EXPECT_CLOSE CALLED')
+    #        self.stop()
+
+    #    self.db.quit(expect_close)
+    #    self.start()
 
 class TestRedisServerCommands(TestTornadoRedis):
     '''
@@ -1006,6 +1020,7 @@ class TestRedisServerCommands(TestTornadoRedis):
         self.db.set('key1','value1', self.expectok())
         self.db.set('key2','value2', self.expectok())
         self.db.dbsize(self.expect(3, next=self.cleanup))
+
         self.start()
 
     @tracer
@@ -1025,7 +1040,7 @@ class TestRedisPubSubCommands(TestTornadoRedis):
     Test the set of 'server' commands as defined by the redis docs at :http://redis.io/commands#server
     '''
 
-    @tracer 
+    @tracer
     def publish_thread_cb(self, err, val):
         logger.debug('published message to %d subscribers'%val)
 
@@ -1077,4 +1092,16 @@ class TestRedisPubSubCommands(TestTornadoRedis):
         self.start()
 
 if __name__ == '__main__':
-    unittest.main()
+    suite = unittest.TestSuite()
+    #suite.addTest(TestRedisKeyCommands('test_randomkey'))
+    suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestRedisKeyCommands))
+    suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestRedisHashCommands))
+    suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestRedisStringCommands))
+    suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestRedisSetCommands))
+    suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestRedisSortedSetCommands))
+    suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestRedisListCommands))
+    suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestRedisServerCommands))
+    suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestRedisPubSubCommands))
+    suite.addTests(unittest.TestLoader().loadTestsFromTestCase(TestRedisConnectionCommands))
+
+    unittest.TextTestRunner().run(suite)

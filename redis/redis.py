@@ -1,6 +1,5 @@
 #!/usr/bin/python2 
 
-from tornado import ioloop
 from tornado import iostream
 import socket
 import sys
@@ -26,16 +25,11 @@ ReplyType = enum('MULTI_BULK','BULK','STATUS','INTEGER','SUBSCRIBE')
 class Redis(object):
 
 
-    def __init__(self, host='localhost', port=6379, db=0, _ioloop=None):
+    def __init__(self, host='localhost', port=6379, db=0):
 
         self._host = host
         self._port = port
         self._db = db
-        
-        if not ioloop:
-            self._ioloop = _ioloop.IOLoop.instance()
-        else:
-            self._ioloop = _ioloop
 
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
 
@@ -219,10 +213,10 @@ class Redis(object):
         if msg:
             msg_type = msg[0]
             channel = msg[1]
-            
+
             logger.debug('msg_type: %s'%msg_type)
             logger.debug('msg:%s'%msg)
-    
+
             if msg_type == 'subscribe' or msg_type == 'psubscribe':
                 logger.debug('successfully subscribed to: %s'%channel)
                 self._subscribed = True
@@ -309,7 +303,7 @@ class Redis(object):
 
             logger.debug('popped next command: %s'%self._cur_cmd)
             self._send_command()
-    
+
     @tracer
     def _send_command(self):
         (self._cur_reply_type, self._cur_reply_handler) = self._cmd_map.get(self._cur_cmd, None)
@@ -361,7 +355,7 @@ class Redis(object):
                 self._execute_callback(None, self._cur_multi_bulk_reply_data)
             else:
                 self._execute_callback(None, int(data[1:]))
-        
+
     @tracer
     def _handle_multi_bulk_reply(self, data):
         data = data.strip()
@@ -374,7 +368,7 @@ class Redis(object):
                 self._execute_callback(None, [None])
             else:
                 self._stream.read_until('\r\n', self._handle_bulk_reply)
-        
+
 
     @tracer
     def _handle_bulk_reply(self, data):
