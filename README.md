@@ -13,6 +13,7 @@ From git repo:
     sudo python setup.py install
 
 Via pip:
+
     pip install redis-tornado
 
 
